@@ -84,7 +84,7 @@ if uploaded_file is not None:
                     
             st.info(f"**Quality Score:** {details.get('quality_score', 0.0):.1f}/30")
             
-            st.info(f"**Relevance Score:** {details.get('relevance_score', 0)}/50")
+            st.info(f"**Relevance Score:** {details.get('relevance_score', 0)}/60")
             
             st.markdown("### Reasoning")
             st.write(reasoning)

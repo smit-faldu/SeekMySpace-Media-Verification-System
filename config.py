@@ -14,11 +14,11 @@ class AppConfig:
     TARGET_CLASSES: Set[int] = None
     
     # Scoring Weights & Thresholds
-    METADATA_SCORE_GPS: int = 10
-    METADATA_SCORE_TIMESTAMP: int = 10
+    METADATA_SCORE_GPS: int = 5
+    METADATA_SCORE_TIMESTAMP: int = 5
     
     QUALITY_MAX_SCORE: int = 30
-    QUALITY_BLUR_SHARP_THRESHOLD: float = 300.0
+    QUALITY_BLUR_SHARP_THRESHOLD: float = 400.0
     QUALITY_BLUR_ACCEPTABLE_THRESHOLD: float = 150.0
     QUALITY_BLUR_POOR_THRESHOLD: float = 80.0
     
@@ -32,6 +32,7 @@ class AppConfig:
     RELEVANCE_CONFIDENCE_THRESHOLD: float = 0.3
     
     DECISION_AUTO_APPROVE_THRESHOLD: int = 70
+    STRICT_STOCK_PHOTO_CHECK: bool = False
     
     # Video Extraction Parameters
     VIDEO_MAX_FRAMES: int = 3

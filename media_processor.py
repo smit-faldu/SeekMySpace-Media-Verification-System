@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 from typing import Dict, Any, List, Optional
 import os
-
+from pymediainfo import MediaInfo
 from logger import get_logger
 from config import config
 
@@ -53,51 +53,50 @@ def extract_metadata_from_image(image_path: str) -> Dict[str, Any]:
         
     return metadata
 
-def extract_frames_from_video(video_path: str, num_frames: int = config.VIDEO_MAX_FRAMES) -> List[np.ndarray]:
-    """
-    Extract a specified number of frames evenly spaced from a video file.
+    return frames
+def extract_metadata_from_video(video_path: str) -> Dict[str, Any]:
+    """Extract metadata from video files using pymediainfo."""
+    metadata = {'has_gps': False, 'has_timestamp': False, 'raw_data': {}}
+    if not os.path.exists(video_path): return metadata
 
-    Args:
-        video_path (str): The file path to the video.
-        num_frames (int): Number of frames to extract.
+    try:
+        media_info = MediaInfo.parse(video_path)
+        for track in media_info.tracks:
+            if track.track_type == "General":
+                if track.encoded_date or track.file_last_modification_date:
+                    metadata['has_timestamp'] = True
+                if track.com_apple_quicktime_location_iso6709 or track.xyz:
+                    metadata['has_gps'] = True
+        logger.info(f"Video Metadata: GPS={metadata['has_gps']}, Timestamp={metadata['has_timestamp']}")
+    except Exception as e:
+        logger.error(f"Error reading video metadata: {e}", exc_info=True)
+    return metadata
 
-    Returns:
-        List[np.ndarray]: A list of extracted frames in RGB format.
-    """
+def extract_frames_from_video(video_path: str, interval_seconds: int = 1, max_frames: int = 5) -> List[np.ndarray]:
+    """Extract frames dynamically based on video length."""
     frames: List[np.ndarray] = []
-    
-    if not os.path.exists(video_path):
-        logger.error(f"Video path does not exist: {video_path}")
-        return frames
+    if not os.path.exists(video_path): return frames
 
     try:
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.warning(f"Could not open video file: {video_path}")
-            return frames
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        if fps <= 0: fps = 30 # Fallback
             
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames <= 0:
-            logger.warning(f"Video file has no frames or is corrupted: {video_path}")
-            cap.release()
-            return frames
-            
-        # Get evenly spaced frame indices
-        intervals = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+        frame_interval = fps * interval_seconds
         
-        for frame_idx in intervals:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        for i in range(0, total_frames, frame_interval):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = cap.read()
             if ret:
-                # Convert BGR (OpenCV default) to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(frame_rgb)
+                frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if len(frames) >= max_frames: # Prevent memory overload on long videos
+                break
                 
         cap.release()
-        logger.info(f"Successfully extracted {len(frames)} frames from {video_path}")
-        
+        logger.info(f"Extracted {len(frames)} frames from {video_path}")
     except Exception as e:
-        logger.error(f"Error extracting frames from video {video_path}: {e}", exc_info=True)
+        logger.error(f"Error extracting frames: {e}", exc_info=True)
         
     return frames
 

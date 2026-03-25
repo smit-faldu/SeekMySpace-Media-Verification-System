@@ -1,78 +1,75 @@
-import numpy as np
 from typing import Tuple, Optional
-from ultralytics import YOLO
+import numpy as np
+from PIL import Image
+from transformers import pipeline
 
 from logger import get_logger
-from config import config
 
 logger = get_logger(__name__)
 
 class RelevanceEngine:
-    """
-    Engine for evaluating the relevance of media to commercial/office spaces
-    using an object detection model (YOLO).
-    """
     def __init__(self):
         try:
-            # Load YOLO model. Using nano for speed.
-            logger.info(f"Loading YOLO model: {config.YOLO_MODEL_NAME}")
-            self.model = YOLO(config.YOLO_MODEL_NAME)
-            self.target_classes = config.TARGET_CLASSES
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model {config.YOLO_MODEL_NAME}: {e}", exc_info=True)
-            self.model = None
-
-    def evaluate_relevance(self, frame: Optional[np.ndarray]) -> Tuple[int, str]:
-        """
-        Evaluates the relevance of a frame to a commercial/office space.
-        
-        Args:
-            frame (Optional[np.ndarray]): RGB image array.
-
-        Returns:
-            Tuple[int, str]: A relevance score (0 to 50) and a reasoning string.
-        """
-        if frame is None or frame.size == 0:
-            logger.warning("evaluate_relevance called with empty or None frame.")
-            return 0, "Invalid or empty frame."
+            logger.info("Loading local CLIP zero-shot image classifier...")
+            self.classifier = pipeline("zero-shot-image-classification", model="openai/clip-vit-base-patch32")
             
-        if self.model is None:
-            logger.error("YOLO model is not loaded. Returning 0 relevance.")
-            return 0, "Relevance model failed to load."
+            self.high_relevance_labels = [
+                "professional corporate office interior", "modern co-working space",
+                "conference room with table and chairs", "commercial retail store interior",
+                "industrial warehouse interior"
+            ]
+            self.moderate_relevance_labels = [
+                "empty commercial real estate", "building lobby or reception area",
+                "office cubicles", "restaurant or cafe interior"
+            ]
+            self.negative_labels = [
+                "residential living room", "messy bedroom", "home kitchen or bathroom",
+                "outdoor nature or park", "street view with cars", 
+                "close-up portrait of a person", "screenshot of text or document", "selfie photograph"
+            ]
+            self.target_labels = self.high_relevance_labels + self.moderate_relevance_labels + self.negative_labels
+        except Exception as e:
+            logger.error(f"Failed to load CLIP classifier: {e}", exc_info=True)
+            self.classifier = None
+
+    def evaluate_relevance(self, frame: Optional[np.ndarray]) -> Tuple[float, str]:
+        if frame is None or frame.size == 0:
+            return 0.0, "Invalid or empty frame."
+        if self.classifier is None:
+            return 0.0, "Relevance model failed to load."
 
         try:
-            # Inference (verbose=False to keep stdout clean)
-            results = self.model(frame, verbose=False)
+            pil_img = Image.fromarray(frame)
+            results = self.classifier(pil_img, candidate_labels=self.target_labels)
             
-            detected_targets = []
-            for result in results:
-                boxes = result.boxes
-                for box in boxes:
-                    cls_id = int(box.cls[0].item())
-                    confidence = float(box.conf[0].item())
-                    
-                    if cls_id in self.target_classes and confidence > config.RELEVANCE_CONFIDENCE_THRESHOLD:
-                        detected_targets.append(result.names[cls_id])
-                        
-            # Score calculation based on number of unique target classes detected
-            score = 0
-            reasoning = "No relevant commercial space objects detected."
+            top_label = results[0]['label']
+            top_score = results[0]['score']
             
-            if len(detected_targets) > 0:
-                unique_targets = set(detected_targets)
-                if len(unique_targets) >= 3:
-                    score = 50
-                    reasoning = f"Highly relevant space. Detected: {', '.join(unique_targets)}."
-                elif len(unique_targets) == 2:
-                    score = 35
-                    reasoning = f"Moderately relevant space. Detected: {', '.join(unique_targets)}."
+            # --- CONTINUOUS SCORING MAX 60 POINTS ---
+            if top_label in self.high_relevance_labels:
+                # Base 35 points + up to 25 points based on confidence.
+                score = min(60.0, 35.0 + (top_score * 25.0))
+                reasoning = f"High relevance: '{top_label}' ({top_score:.2f} conf)."
+                
+            elif top_label in self.moderate_relevance_labels:
+                # Base 15 points + up to 25 points based on confidence. Max 40.
+                score = min(40.0, 15.0 + (top_score * 25.0))
+                reasoning = f"Moderate relevance: '{top_label}' ({top_score:.2f} conf)."
+                
+            elif top_label in self.negative_labels:
+                if top_score > 0.4:
+                    score = 0.0
                 else:
-                    score = 20
-                    reasoning = f"Slightly relevant space. Detected: {', '.join(unique_targets)}."
-                    
-            logger.debug(f"Relevance evaluated: score={score}, targets detected={detected_targets}")
+                    score = min(10.0, 10.0 - (top_score * 20.0))
+                reasoning = f"Low relevance (Rejected): '{top_label}' ({top_score:.2f} conf)."
+            else:
+                score = 10.0
+                reasoning = f"Unknown classification status for '{top_label}'."
+            
+            # Round to one decimal place for realistic output
+            score = round(score, 1)
             return score, reasoning
             
         except Exception as e:
             logger.error(f"Error evaluating relevance: {e}", exc_info=True)
-            return 0, f"Error calculating relevance: {str(e)}"
+            return 0.0, f"Error calculating relevance: {str(e)}"

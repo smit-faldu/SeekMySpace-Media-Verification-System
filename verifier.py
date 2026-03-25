@@ -1,7 +1,12 @@
 import os
-from typing import TypedDict, Dict, Any, List
+from typing import TypedDict, List
 
-from media_processor import extract_metadata_from_image, extract_frames_from_video, load_image
+from media_processor import (
+    extract_metadata_from_image, 
+    extract_metadata_from_video, 
+    extract_frames_from_video, 
+    load_image
+)
 from quality_evaluator import evaluate_quality
 from relevance_engine import RelevanceEngine
 from logger import get_logger
@@ -77,21 +82,22 @@ class MediaVerifier:
             # 1. Metadata Extraction
             if not is_video:
                 metadata = extract_metadata_from_image(file_path)
-                if metadata.get('has_gps'):
-                    metadata_score += config.METADATA_SCORE_GPS
-                    metadata_details['gps'] = True
-                if metadata.get('has_timestamp'):
-                    metadata_score += config.METADATA_SCORE_TIMESTAMP
-                    metadata_details['timestamp'] = True
             else:
-                # Video EXIF metadata mapping is out of scope for basic assignments
-                # without external dependencies like ffmpeg.
-                metadata_score = 0
+                # Upgraded to process video metadata using pymediainfo
+                metadata = extract_metadata_from_video(file_path)
+
+            if metadata.get('has_gps'):
+                metadata_score += config.METADATA_SCORE_GPS
+                metadata_details['gps'] = True
+            if metadata.get('has_timestamp'):
+                metadata_score += config.METADATA_SCORE_TIMESTAMP
+                metadata_details['timestamp'] = True
                 
             # 2. Extract frames
             frames = []
             if is_video:
-                frames = extract_frames_from_video(file_path, num_frames=config.VIDEO_MAX_FRAMES)
+                # Using the upgraded dynamic frame extraction
+                frames = extract_frames_from_video(file_path, interval_seconds=1, max_frames=5)
             else:
                 frame = load_image(file_path)
                 if frame is not None:
@@ -133,16 +139,28 @@ class MediaVerifier:
             # 5. Final Score Calculation
             total_score = float(metadata_score + quality_score + relevance_score)
             
-            # 6. Decision Logic
-            if total_score > config.DECISION_AUTO_APPROVE_THRESHOLD:
-                decision = "Auto Approved"
-            else:
-                decision = "Flag for Manual Review"
+            # 6. Decision Logic & Heuristics
+            decision = "Pending"
+            
+            # Heuristic 1: The "Stock Photo" Check
+            # Now controlled by config.py so it doesn't ruin testing
+            if config.STRICT_STOCK_PHOTO_CHECK:
+                if metadata_score == 0 and quality_score >= 25.0 and total_score >= config.DECISION_AUTO_APPROVE_THRESHOLD:
+                    decision = "Flag for Manual Review"
+                    relevance_reason += " (WARNING: Extremely high quality but missing metadata suggests potential stock photo.)"
+                    total_score -= 10.0
+            
+            # Standard threshold fallback if no heuristics triggered
+            if decision == "Pending":
+                if total_score >= config.DECISION_AUTO_APPROVE_THRESHOLD:
+                    decision = "Auto Approved"
+                else:
+                    decision = "Flag for Manual Review"
                 
             final_reasoning = (
                 f"Metadata provided {metadata_score}/20 points. "
                 f"Quality scored {quality_score:.1f}/30 points ({quality_reason}). "
-                f"Relevance scored {relevance_score}/50 points ({relevance_reason})."
+                f"Relevance scored {relevance_score}/60 points ({relevance_reason})."
             )
             
             logger.info(f"Verification complete for {file_path}. Score: {total_score}, Decision: {decision}")
